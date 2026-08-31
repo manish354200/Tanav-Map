@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
+const API_BASE_URL =
+  import.meta?.env?.VITE_API_URL ||
+  'http://localhost:8000/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -55,6 +57,11 @@ export const interventionAPI = {
   approve: (id, approvedBy) =>
     apiClient.post(`/interventions/${id}/approve`, { approved_by: approvedBy }),
   execute: (id) => apiClient.post(`/interventions/${id}/execute`),
+};
+
+export const assistantAPI = {
+  respond: (message, victimId = 1) =>
+    apiClient.post('/assistant/response', { message, victim_id: victimId }),
 };
 
 export default apiClient;

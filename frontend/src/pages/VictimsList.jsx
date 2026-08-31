@@ -1,6 +1,27 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { victimAPI } from '../services/api';
 
 const VictimsList = () => {
+  const [victims, setVictims] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchVictims = async () => {
+      try {
+        const response = await victimAPI.getAll(1, 20);
+        setVictims(response?.data?.items || []);
+      } catch (error) {
+        console.error('Failed to fetch victims:', error);
+        setVictims([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchVictims();
+  }, []);
+
   return (
     <div className="victims-list">
       <h1>Victims Registry</h1>
@@ -35,7 +56,29 @@ const VictimsList = () => {
             </tr>
           </thead>
           <tbody>
-            {/* Victim rows will be rendered here */}
+            {loading ? (
+              <tr>
+                <td colSpan="7">Loading victims...</td>
+              </tr>
+            ) : victims.length > 0 ? (
+              victims.map((victim) => (
+                <tr key={victim.id}>
+                  <td>#{victim.id}</td>
+                  <td>{victim.name || 'Unnamed Victim'}</td>
+                  <td>{victim.case_type || 'Not specified'}</td>
+                  <td>{victim.status || 'registered'}</td>
+                  <td>{victim.current_distress_score ?? '--'}</td>
+                  <td>{victim.risk_level || 'medium'}</td>
+                  <td>
+                    <Link to={`/victims/${victim.id}`}>View</Link>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="7">No victims found.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

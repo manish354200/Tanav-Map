@@ -1,10 +1,30 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { alertAPI } from '../services/api';
 
 const Alerts = () => {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        const response = await alertAPI.getAll('', '', 20);
+        setAlerts(response?.data?.alerts || []);
+      } catch (error) {
+        console.error('Failed to fetch alerts:', error);
+        setAlerts([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAlerts();
+  }, []);
+
   return (
     <div className="alerts-page">
       <h1>Active Alerts</h1>
-      
+
       <div className="alert-filters">
         <button className="filter-btn active">All</button>
         <button className="filter-btn">Critical (Red)</button>
@@ -13,24 +33,32 @@ const Alerts = () => {
       </div>
 
       <div className="alerts-container">
-        <div className="alert-item critical">
-          <div className="alert-header">
-            <span className="alert-level">CRITICAL</span>
-            <span className="alert-time">2 hours ago</span>
-          </div>
-          <div className="alert-content">
-            <h3>Severe Mental Health Crisis Detected</h3>
-            <p>Victim ID: #1001</p>
-            <p>Distress Score: 88/100</p>
-            <p className="alert-message">Multiple threat keywords detected. Immediate psychiatric intervention recommended.</p>
-          </div>
-          <div className="alert-actions">
-            <button className="btn-primary">View Details</button>
-            <button className="btn-secondary">Acknowledge</button>
-          </div>
-        </div>
-
-        {/* More alert items */}
+        {loading ? (
+          <p>Loading alerts...</p>
+        ) : alerts.length > 0 ? (
+          alerts.map((alert, index) => (
+            <div key={alert.id || index} className={`alert-item ${alert.level || 'info'}`}>
+              <div className="alert-header">
+                <span className="alert-level">{(alert.level || 'INFO').toUpperCase()}</span>
+                <span className="alert-time">{alert.created_at || 'recently'}</span>
+              </div>
+              <div className="alert-content">
+                <h3>{alert.title || 'Mental Health Alert'}</h3>
+                <p>Victim ID: #{alert.victim_id || 'N/A'}</p>
+                <p>Distress Score: {alert.score || 'N/A'}/100</p>
+                <p className="alert-message">
+                  {alert.message || 'Priority intervention recommended.'}
+                </p>
+              </div>
+              <div className="alert-actions">
+                <button className="btn-primary">View Details</button>
+                <button className="btn-secondary">Acknowledge</button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p>No alerts currently reported.</p>
+        )}
       </div>
     </div>
   );
