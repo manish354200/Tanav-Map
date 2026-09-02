@@ -11,6 +11,24 @@ const apiClient = axios.create({
   },
 });
 
+apiClient.interceptors.request.use((config) => {
+  const savedSession = localStorage.getItem('mental-health-session');
+  if (savedSession) {
+    config.headers.Authorization = `Bearer ${JSON.parse(savedSession).access_token}`;
+  }
+  return config;
+});
+
+export const authAPI = {
+  signup: (data) => apiClient.post('/auth/signup', data),
+  login: (email, password) => {
+    const form = new URLSearchParams({ username: email, password });
+    return apiClient.post('/auth/login', form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+  },
+};
+
 export const victimAPI = {
   getAll: (page = 1, pageSize = 10) => 
     apiClient.get(`/victims?page=${page}&page_size=${pageSize}`),
@@ -60,8 +78,8 @@ export const interventionAPI = {
 };
 
 export const assistantAPI = {
-  respond: (message, victimId = 1) =>
-    apiClient.post('/assistant/response', { message, victim_id: victimId }),
+  respond: (message, victimId = 1, history = []) =>
+    apiClient.post('/assistant/response', { message, victim_id: victimId, history }),
 };
 
 export default apiClient;

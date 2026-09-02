@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Navbar = () => {
+const Navbar = ({ session, onLogout }) => {
   return (
     <nav className="navbar">
       <div className="navbar-brand">
@@ -13,8 +13,8 @@ const Navbar = () => {
         <a href="/help" className="nav-item">Help</a>
       </div>
       <div className="navbar-user">
-        <span className="user-name">Admin User</span>
-        <button className="btn-logout">Logout</button>
+        <span className="user-name">{session?.name || session?.email}</span>
+        <button className="btn-logout" onClick={onLogout}>Logout</button>
       </div>
     </nav>
   );
