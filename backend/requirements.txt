@@ -19,8 +19,6 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 
 # NLP & Text Processing
-transformers==4.35.2
-torch==2.1.1
 spacy==3.7.2
 nltk==3.8.1
 sentence-transformers==2.2.2
