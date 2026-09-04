@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { victimAPI } from '../services/api';
+import { useLanguage } from '../i18n';
 
 const VictimsList = () => {
+  const { t } = useLanguage();
   const [victims, setVictims] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -24,7 +26,7 @@ const VictimsList = () => {
 
   return (
     <div className="victims-list">
-      <h1>Victims Registry</h1>
+      <h1>{t('victims')}</h1>
       <div className="filter-section">
         <input type="text" placeholder="Search by name or ID..." />
         <select>

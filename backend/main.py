@@ -355,10 +355,19 @@ async def national_dashboard():
 
 @app.get("/api/v1/alerts")
 async def get_alerts():
-    """Get alerts"""
+    """Get alerts ordered from critical to low priority."""
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    alerts = sorted(
+        alerts_db.values(),
+        key=lambda alert: (
+            priority_order.get(str(alert.get("level", "low")).lower(), 4),
+            -(alert.get("score") or 0),
+            alert.get("created_at", ""),
+        ),
+    )
     return {
         "total": len(alerts_db),
-        "alerts": list(alerts_db.values())
+        "alerts": alerts
     }
 
 @app.post("/api/v1/alerts/{alert_id}/acknowledge")
@@ -369,7 +378,7 @@ async def acknowledge_alert(alert_id: int):
     alerts_db[alert_id]["status"] = "acknowledged"
     return {"alert_id": alert_id, "status": "acknowledged"}
 
-def call_openrouter(message: str, history=None):
+def call_openrouter(message: str, history=None, language="english"):
     """Optional OpenRouter integration for more natural conversational replies."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -379,7 +388,7 @@ def call_openrouter(message: str, history=None):
     conversation = [
         {
             "role": "system",
-            "content": "You are a warm, friendly mental health support companion. Talk naturally like a close friend, in simple English or Hinglish. Be empathetic, conversational, and brief. Ask one gentle follow-up question when useful. Always return valid JSON with keys: reply, stress_percentage, stress_level. stress_percentage must be an integer from 0 to 100. stress_level must be one of low, moderate, high."
+            "content": f"You are a warm, friendly mental health support companion. Reply only in {language}, using simple, natural language and a culturally respectful tone. Be empathetic, conversational, and brief. Ask one gentle follow-up question when useful. Always return valid JSON with keys: reply, stress_percentage, stress_level. stress_percentage must be an integer from 0 to 100. stress_level must be one of low, moderate, high."
         }
     ]
     for item in (history or [])[-8:]:
@@ -461,6 +470,10 @@ async def assistant_response(payload: dict):
     """Multilingual conversational support assistant with local retrieval and optional OpenRouter-powered responses."""
     message = str(payload.get("message", "")).strip()
     history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    supported_languages = {"english", "hindi", "tamil", "telugu", "bengali", "marathi", "punjabi"}
+    language = str(payload.get("language", "english")).lower()
+    if language not in supported_languages:
+        language = "english"
     message_lower = message.lower()
 
     if not message:
@@ -492,7 +505,7 @@ async def assistant_response(payload: dict):
             "stress_level": "high"
         }
 
-    openrouter_result = call_openrouter(message, history)
+    openrouter_result = call_openrouter(message, history, language)
     if openrouter_result:
         return openrouter_result
 

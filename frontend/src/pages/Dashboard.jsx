@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { dashboardAPI, alertAPI } from '../services/api';
 import SupportAssistant from '../components/SupportAssistant';
+import { useLanguage } from '../i18n';
 
 const Dashboard = () => {
+  const { t } = useLanguage();
   const [stats, setStats] = useState({
     totalVictims: 0,
     highRiskCases: 0,
@@ -35,7 +37,7 @@ const Dashboard = () => {
         setError('');
       } catch (err) {
         console.error('Dashboard data fetch failed:', err);
-        setError('Unable to load dashboard data right now.');
+        setError(t('dashboardError'));
       } finally {
         setLoading(false);
       }
@@ -46,25 +48,25 @@ const Dashboard = () => {
 
   return (
     <div className="dashboard">
-      <h1>Mental Health Monitoring Dashboard</h1>
+      <h1>{t('dashboardTitle')}</h1>
 
       {error && <p className="error-message">{error}</p>}
 
       <div className="dashboard-grid">
         <div className="stat-card">
-          <h3>Total Victims</h3>
+          <h3>{t('totalVictims')}</h3>
           <p className="stat-value">{loading ? '...' : stats.totalVictims}</p>
         </div>
         <div className="stat-card">
-          <h3>High Risk Cases</h3>
+          <h3>{t('highRiskCases')}</h3>
           <p className="stat-value danger">{loading ? '...' : stats.highRiskCases}</p>
         </div>
         <div className="stat-card">
-          <h3>Active Alerts</h3>
+          <h3>{t('activeAlerts')}</h3>
           <p className="stat-value warning">{loading ? '...' : stats.activeAlerts}</p>
         </div>
         <div className="stat-card">
-          <h3>Interventions Today</h3>
+          <h3>{t('interventionsToday')}</h3>
           <p className="stat-value success">{loading ? '...' : stats.interventionsToday}</p>
         </div>
       </div>
@@ -72,10 +74,10 @@ const Dashboard = () => {
       <SupportAssistant />
 
       <div className="dashboard-section">
-        <h2>Recent Alerts</h2>
+        <h2>{t('recentAlerts')}</h2>
         <div className="alert-list">
           {loading ? (
-            <p>Loading alerts...</p>
+            <p>{t('loadingAlerts')}</p>
           ) : alerts.length > 0 ? (
             alerts.map((alert) => (
               <div key={alert.id || alert.victim_id || Math.random()} className="alert-item">
@@ -84,13 +86,13 @@ const Dashboard = () => {
               </div>
             ))
           ) : (
-            <p>No alerts currently reported.</p>
+            <p>{t('noAlerts')}</p>
           )}
         </div>
       </div>
 
       <div className="dashboard-section">
-        <h2>Distress Trend</h2>
+        <h2>{t('distressTrend')}</h2>
         <div className="chart-container">
           <div className="trend-bars">
             {[42, 48, 51, 58, 62, 66, 72].map((value, index) => (

@@ -1,9 +1,11 @@
 import React from 'react';
+import { useLanguage } from '../i18n';
 
 const Analytics = () => {
+  const { t } = useLanguage();
   return (
     <div className="analytics-page">
-      <h1>Analytics & Reports</h1>
+      <h1>{t('analytics')}</h1>
       
       <div className="analytics-grid">
         <div className="analytics-card">

@@ -78,8 +78,13 @@ export const interventionAPI = {
 };
 
 export const assistantAPI = {
-  respond: (message, victimId = 1, history = []) =>
-    apiClient.post('/assistant/response', { message, victim_id: victimId, history }),
+  respond: (message, victimId = 1, history = [], language = 'english') =>
+    apiClient.post('/assistant/response', {
+      message,
+      victim_id: victimId,
+      history,
+      language,
+    }),
 };
 
 export default apiClient;

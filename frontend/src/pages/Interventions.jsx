@@ -1,9 +1,11 @@
 import React from 'react';
+import { useLanguage } from '../i18n';
 
 const Interventions = () => {
+  const { t } = useLanguage();
   return (
     <div className="interventions-page">
-      <h1>Intervention Management</h1>
+      <h1>{t('interventions')}</h1>
       
       <div className="intervention-filters">
         <select>

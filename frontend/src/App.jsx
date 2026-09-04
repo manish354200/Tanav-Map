@@ -15,6 +15,7 @@ import Auth from './pages/Auth';
 // Components
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
+import { LanguageProvider } from './i18n';
 
 function App() {
   const [session, setSession] = React.useState(() => {
@@ -34,7 +35,8 @@ function App() {
 
   return (
     <Provider store={store}>
-      <Router>
+      <LanguageProvider>
+        <Router>
         {!session ? (
           <Routes>
             <Route path="*" element={<Auth onAuthenticated={handleAuthenticated} />} />
@@ -58,7 +60,8 @@ function App() {
             </div>
           </div>
         )}
-      </Router>
+        </Router>
+      </LanguageProvider>
     </Provider>
   );
 }

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { alertAPI } from '../services/api';
+import { useLanguage } from '../i18n';
 
 const Alerts = () => {
+  const { t } = useLanguage();
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -23,7 +25,7 @@ const Alerts = () => {
 
   return (
     <div className="alerts-page">
-      <h1>Active Alerts</h1>
+      <h1>{t('activeAlerts')}</h1>
 
       <div className="alert-filters">
         <button className="filter-btn active">All</button>
