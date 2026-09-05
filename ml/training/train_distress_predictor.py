@@ -5,6 +5,7 @@ Uses historical data to train XGBoost/LightGBM for predicting future distress sc
 
 import pandas as pd
 import numpy as np
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
@@ -190,29 +191,20 @@ def train_pipeline():
         'distress_score': np.random.uniform(0, 100, n_samples)
     })
     
-    # Prepare features
-    model = DistressScorePredictionModel(model_type='xgboost')
-    X = model.prepare_features(data)
-    y = data['distress_score'].values
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
-    )
-    
-    # Train model
-    model.train(X_train, y_train, X_val, y_val)
-    
-    # Evaluate
-    metrics = model.evaluate(X_test, y_test)
-    
-    # Save model
-    model.save_model('./models/distress_score_predictor.pkl')
-    
+    os.makedirs("./models", exist_ok=True)
+    horizon_days = [7, 15, 30]
+    for horizon in horizon_days:
+        model = DistressScorePredictionModel(model_type='xgboost')
+        X = model.prepare_features(data)
+        y = data['distress_score'].shift(-horizon).fillna(data['distress_score']).values
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+        model.train(X_train, y_train, X_val, y_val)
+        metrics = model.evaluate(X_test, y_test)
+        version = "v1"
+        model.save_model(f'./models/distress_{horizon}d.pkl')
+        logger.info("Saved %s-day predictor (%s): %s", horizon, version, metrics)
+
     logger.info("Training pipeline completed successfully!")
 
 
