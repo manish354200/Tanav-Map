@@ -3,7 +3,7 @@ FastAPI Application Entry Point
 AI-Based Dynamic Mental Health Monitoring and Distress Prediction System
 """
 
-from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi import FastAPI, Request, HTTPException, status, Depends, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -22,6 +22,16 @@ from collections import Counter
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
+from app.db import Base, engine, get_db
+from app.models import Alert, DistressHistory, Interaction, Intervention, User, Victim
+from app.services.distress_score_service import DistressScoreService
+from app.services.sentiment_service import SentimentAnalysisService
+from app.services.emotion_service import EmotionDetectionService
+from app.services.voice_service import analyze_voice_stress
+from app.services.predictive_service import PredictiveRiskService
 
 # Load environment variables
 load_dotenv()
@@ -36,13 +46,29 @@ logger = logging.getLogger(__name__)
 SECRET_KEY = os.getenv("SECRET_KEY", "change-this-development-secret")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-users_db = {}
+
+Base.metadata.create_all(bind=engine)
+sentiment_service = SentimentAnalysisService(model_name=os.getenv("SENTIMENT_MODEL", "cardiffnlp/twitter-xlm-roberta-base-sentiment"))
+emotion_service = EmotionDetectionService(model_name=os.getenv("EMOTION_MODEL", "SamLowe/roberta-base-go_emotions"))
+predictive_service = PredictiveRiskService()
 
 class SignupRequest(BaseModel):
     name: str
     email: str
     password: str
     role: str = "counselor"
+
+
+class VictimCreateRequest(BaseModel):
+    name: str
+    case_type: str
+    status: str = "registered"
+
+
+class InteractionCreateRequest(BaseModel):
+    victim_id: int
+    message: str
+    channel: str = "chatbot"
 
 def create_access_token(user):
     expires = datetime.utcnow() + timedelta(minutes=30)
@@ -69,103 +95,57 @@ app.add_middleware(
 )
 
 
-# ============== MOCK DATA ==============
-victims_db = {
-    1: {
-        "id": 1,
-        "name": "Ananya Sharma",
-        "case_type": "gang_rape",
-        "status": "registered",
-        "current_distress_score": 68,
-        "risk_level": "high",
-        "registration_date": "2026-08-01T09:15:00",
-    },
-    2: {
-        "id": 2,
-        "name": "Meera Iyer",
-        "case_type": "sexual_harassment",
-        "status": "under_investigation",
-        "current_distress_score": 54,
-        "risk_level": "medium",
-        "registration_date": "2026-08-05T14:20:00",
-    },
-    3: {
-        "id": 3,
-        "name": "Riya Verma",
-        "case_type": "domestic_violence",
-        "status": "registered",
-        "current_distress_score": 75,
-        "risk_level": "high",
-        "registration_date": "2026-08-08T11:40:00",
-    },
-    4: {
-        "id": 4,
-        "name": "Sana Khan",
-        "case_type": "trauma",
-        "status": "rehabilitation",
-        "current_distress_score": 43,
-        "risk_level": "medium",
-        "registration_date": "2026-08-12T08:10:00",
-    },
-}
-
-interactions_db = {
-    1: {
-        "id": 1,
-        "victim_id": 1,
-        "type": "text",
-        "message": "I feel scared and unable to sleep because of the threats.",
-        "channel": "chatbot",
-        "timestamp": "2026-08-31T09:00:00",
-    },
-    2: {
-        "id": 2,
-        "victim_id": 1,
-        "type": "text",
-        "message": "I keep checking the door and feel unsafe all the time.",
-        "channel": "chatbot",
-        "timestamp": "2026-08-31T10:00:00",
-    },
-    3: {
-        "id": 3,
-        "victim_id": 2,
-        "type": "text",
-        "message": "I am anxious but trying to stay calm during the process.",
-        "channel": "chatbot",
-        "timestamp": "2026-08-31T11:00:00",
-    },
-}
-
-alerts_db = {
-    1: {
-        "id": 1,
-        "victim_id": 1,
-        "level": "critical",
-        "title": "Severe distress escalation",
-        "message": "Multiple threat keywords detected and sleep disruption reported.",
-        "score": 88,
-        "created_at": "2026-08-31T09:35:00",
-    },
-    2: {
-        "id": 2,
-        "victim_id": 3,
-        "level": "high",
-        "title": "Elevated emotional risk",
-        "message": "Persistent fear and emotional distress reported during recent check-ins.",
-        "score": 76,
-        "created_at": "2026-08-31T08:40:00",
-    },
-}
-
-interventions_db = {
-    1: {
-        "id": 1,
-        "victim_id": 1,
-        "type": "counseling",
-        "priority": "high",
-        "status": "pending",
+def serialize_victim(victim: Victim):
+    return {
+        "id": victim.id,
+        "name": victim.name,
+        "case_type": victim.case_type,
+        "status": victim.status,
+        "current_distress_score": victim.current_distress_score,
+        "risk_level": victim.risk_level,
+        "registration_date": victim.registration_date.isoformat() if victim.registration_date else None,
     }
-}
+
+
+def _risk_to_alert_level(risk_level: str) -> str:
+    return {"low": "green", "medium": "yellow", "high": "orange", "critical": "red"}.get(risk_level, "yellow")
+
+
+def _threat_score_from_text(text: str) -> tuple[float, int]:
+    threat_terms = ["kill", "suicide", "threat", "unsafe", "attack", "violence", "die", "hurt"]
+    lowered = text.lower()
+    matches = sum(lowered.count(word) for word in threat_terms)
+    score = min(100.0, matches * 25.0)
+    return score, matches
+
+
+def _behavior_score_and_missed(interactions: list[Interaction]) -> tuple[float, int]:
+    if not interactions:
+        return 50.0, 0
+    ordered = sorted(interactions, key=lambda i: i.timestamp)
+    if len(ordered) == 1:
+        return 45.0, 0
+    deltas = []
+    for idx in range(1, len(ordered)):
+        deltas.append((ordered[idx].timestamp - ordered[idx - 1].timestamp).total_seconds() / 3600.0)
+    avg_gap = sum(deltas) / len(deltas)
+    missed_followups = sum(1 for gap in deltas if gap > 72)
+    score = min(100.0, max(20.0, 35.0 + (avg_gap * 2.5) + (missed_followups * 8.0)))
+    return round(score, 2), missed_followups
+
+
+def _history_score(db: Session, victim_id: int) -> float:
+    latest_scores = (
+        db.query(DistressHistory.score)
+        .filter(DistressHistory.victim_id == victim_id)
+        .order_by(DistressHistory.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    if not latest_scores:
+        return 50.0
+    values = [item[0] for item in latest_scores]
+    return round(sum(values) / len(values), 2)
 
 # ============== ENDPOINTS ==============
 
@@ -193,189 +173,363 @@ async def root():
 # ============== AUTHENTICATION ==============
 
 @app.post("/api/v1/auth/signup")
-async def signup(data: SignupRequest):
+async def signup(data: SignupRequest, db: Session = Depends(get_db)):
     """Create a dashboard user and return a JWT session."""
     email = data.email.strip().lower()
-    if email in users_db:
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
     if len(data.password) < 8:
         raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
 
-    user = {
-        "name": data.name.strip(),
-        "email": email,
-        "role": data.role,
-        "password_hash": pwd_context.hash(data.password),
-    }
-    users_db[email] = user
-    return auth_response(user)
+    user = User(
+        name=data.name.strip(),
+        email=email,
+        role=data.role,
+        password_hash=pwd_context.hash(data.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return auth_response({"name": user.name, "email": user.email, "role": user.role})
 
 @app.post("/api/v1/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """Validate credentials and return a JWT session."""
     email = form_data.username.strip().lower()
-    user = users_db.get(email)
-    if not user or not pwd_context.verify(form_data.password, user["password_hash"]):
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not pwd_context.verify(form_data.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
-    return auth_response(user)
+    return auth_response({"name": user.name, "email": user.email, "role": user.role})
 
 # ============== VICTIMS ==============
 
 @app.post("/api/v1/victims")
-async def create_victim(data: dict):
+async def create_victim(data: VictimCreateRequest, db: Session = Depends(get_db)):
     """Register a new victim"""
-    victim_id = len(victims_db) + 1
-    victim = {
-        "id": victim_id,
-        **data,
-        "status": "registered",
-        "current_distress_score": 50.0,
-        "risk_level": "medium",
-        "registration_date": datetime.now().isoformat()
-    }
-    victims_db[victim_id] = victim
-    return victim
+    victim = Victim(
+        name=data.name,
+        case_type=data.case_type,
+        status=data.status,
+        current_distress_score=50.0,
+        risk_level="medium",
+    )
+    db.add(victim)
+    db.commit()
+    db.refresh(victim)
+    return serialize_victim(victim)
 
 @app.get("/api/v1/victims")
-async def list_victims(page: int = 1, page_size: int = 10):
+async def list_victims(page: int = 1, page_size: int = 10, db: Session = Depends(get_db)):
     """List all victims"""
-    items = list(victims_db.values())
+    items = db.query(Victim).order_by(Victim.id.asc()).all()
     start = (page - 1) * page_size
     end = start + page_size
     return {
         "total": len(items),
         "page": page,
         "page_size": page_size,
-        "items": items[start:end]
+        "items": [serialize_victim(v) for v in items[start:end]]
     }
 
 @app.get("/api/v1/victims/{victim_id}")
-async def get_victim(victim_id: int):
+async def get_victim(victim_id: int, db: Session = Depends(get_db)):
     """Get victim details"""
-    if victim_id not in victims_db:
-        return {"error": "Victim not found"}, 404
-    return victims_db[victim_id]
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    return serialize_victim(victim)
 
 # ============== INTERACTIONS ==============
 
 @app.post("/api/v1/interactions/text")
-async def log_text_interaction(victim_id: int, message: str, channel: str = "chatbot"):
+async def log_text_interaction(payload: InteractionCreateRequest, db: Session = Depends(get_db)):
     """Log text interaction"""
-    interaction_id = len(interactions_db) + 1
-    interaction = {
-        "id": interaction_id,
+    victim = db.query(Victim).filter(Victim.id == payload.victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    interaction = Interaction(
+        victim_id=payload.victim_id,
+        type="text",
+        message=payload.message,
+        channel=payload.channel,
+    )
+    db.add(interaction)
+    db.commit()
+    db.refresh(interaction)
+    return {"interaction_id": interaction.id, "status": "received"}
+
+
+@app.post("/api/v1/voice-data")
+async def upload_voice_data(victim_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Upload voice sample and compute stress indicators."""
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    file_bytes = await file.read()
+    voice_result = analyze_voice_stress(file_bytes=file_bytes, suffix=os.path.splitext(file.filename or ".wav")[1] or ".wav")
+    interaction = Interaction(
+        victim_id=victim_id,
+        type="voice",
+        message=voice_result.get("transcript") or None,
+        channel="voice_upload",
+        audio_file_path=file.filename or "upload",
+        processed=True,
+    )
+    db.add(interaction)
+    db.commit()
+    db.refresh(interaction)
+    return {
+        "interaction_id": interaction.id,
         "victim_id": victim_id,
-        "type": "text",
-        "message": message,
-        "channel": channel,
-        "timestamp": datetime.now().isoformat()
+        "voice_stress_score": voice_result.get("voice_stress_score", 50.0),
+        "features": voice_result.get("features", {}),
+        "transcript": voice_result.get("transcript", ""),
     }
-    interactions_db[interaction_id] = interaction
-    return {"interaction_id": interaction_id, "status": "received"}
 
 @app.get("/api/v1/interactions/{victim_id}/history")
-async def get_interaction_history(victim_id: int, limit: int = 10):
+async def get_interaction_history(victim_id: int, limit: int = 10, db: Session = Depends(get_db)):
     """Get interaction history"""
-    victim_interactions = [v for v in interactions_db.values() if v.get("victim_id") == victim_id]
+    victim_interactions = (
+        db.query(Interaction)
+        .filter(Interaction.victim_id == victim_id)
+        .order_by(Interaction.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
     return {
         "victim_id": victim_id,
-        "total_interactions": len(victim_interactions),
-        "recent_interactions": victim_interactions[-limit:]
+        "total_interactions": db.query(func.count(Interaction.id)).filter(Interaction.victim_id == victim_id).scalar() or 0,
+        "recent_interactions": [
+            {
+                "id": item.id,
+                "victim_id": item.victim_id,
+                "type": item.type,
+                "message": item.message,
+                "channel": item.channel,
+                "timestamp": item.timestamp.isoformat() if item.timestamp else None,
+            }
+            for item in reversed(victim_interactions)
+        ]
     }
 
 # ============== ANALYSIS ==============
 
 @app.post("/api/v1/analysis/{victim_id}/analyze")
-async def analyze_victim(victim_id: int):
+async def analyze_victim(victim_id: int, db: Session = Depends(get_db)):
     """Analyze victim data"""
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    interactions = (
+        db.query(Interaction)
+        .filter(Interaction.victim_id == victim_id)
+        .order_by(Interaction.timestamp.desc())
+        .limit(20)
+        .all()
+    )
+    text_blob = " ".join((item.message or "") for item in interactions if item.message).strip()
+    sentiment_score = sentiment_service.get_sentiment_score(text_blob)
+    emotions = emotion_service.detect_emotions(text_blob)
+    emotion = emotion_service.get_dominant_emotion(text_blob)
+    threat_score, threat_hits = _threat_score_from_text(text_blob)
+    behavior_score, missed_followups = _behavior_score_and_missed(interactions)
+    avg_voice = (
+        db.query(func.avg(DistressHistory.voice_score))
+        .filter(DistressHistory.victim_id == victim_id)
+        .scalar()
+    )
+    voice_score = float(avg_voice) if avg_voice is not None else 50.0
+    history_score = _history_score(db, victim_id)
+    distress = DistressScoreService.calculate_distress_score(
+        sentiment_score=sentiment_score,
+        voice_score=voice_score,
+        behavior_score=behavior_score,
+        threat_score=threat_score,
+        history_score=history_score,
+    )
+    forecast = predictive_service.forecast(distress["component_scores"], distress["total_score"])
+    explanations = predictive_service.explain(distress["component_scores"], distress["total_score"])
+    explanations.append(f"Missed follow-ups observed: {missed_followups}.")
+    if threat_hits:
+        explanations.append(f"Threat indicators detected {threat_hits} times in recent interactions.")
+
+    victim.current_distress_score = distress["total_score"]
+    victim.risk_level = distress["risk_level"]
+    history_entry = DistressHistory(
+        victim_id=victim_id,
+        score=distress["total_score"],
+        risk_level=distress["risk_level"],
+        sentiment_score=distress["component_scores"]["sentiment"],
+        voice_score=distress["component_scores"]["voice"],
+        behavior_score=distress["component_scores"]["behavior"],
+        threat_score=distress["component_scores"]["threats"],
+        history_score=distress["component_scores"]["history"],
+    )
+    db.add(history_entry)
+    if distress["risk_level"] in {"high", "critical"}:
+        alert = Alert(
+            victim_id=victim_id,
+            level=distress["risk_level"],
+            title="Distress escalation detected",
+            message="Automated analysis detected elevated risk requiring attention.",
+            score=distress["total_score"],
+        )
+        db.add(alert)
+    db.commit()
+
     return {
         "victim_id": victim_id,
-        "distress_score": 68,
-        "risk_level": "high",
+        "analysis": {
+            "sentiment_score": round(sentiment_score, 2),
+            "sentiment": sentiment_service.analyze_text(text_blob).get("label", "neutral"),
+            "emotion": emotion,
+            "emotion_scores": emotions,
+            "voice_stress": round(voice_score, 2),
+            "behavior_score": round(behavior_score, 2),
+            "threat_indicators": threat_hits,
+            "threat_level": "high" if threat_score >= 70 else "medium" if threat_score >= 35 else "low",
+        },
+        "distress_score": {
+            "current": distress["total_score"],
+            "risk_level": distress["risk_level"],
+            "components": distress["component_scores"],
+        },
+        "prediction": forecast,
+        "explanation": explanations,
         "analysis_timestamp": datetime.now().isoformat(),
-        "components": {
-            "sentiment": 65,
-            "voice_stress": 72,
-            "behavior": 58,
-            "threats": 80,
-            "history": 50
-        }
     }
 
 @app.get("/api/v1/analysis/{victim_id}/distress-score")
-async def get_distress_score(victim_id: int):
+async def get_distress_score(victim_id: int, db: Session = Depends(get_db)):
     """Get current distress score"""
-    victim = victims_db.get(victim_id)
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
     if not victim:
-        return {"error": "Victim not found"}, 404
+        raise HTTPException(status_code=404, detail="Victim not found")
+    history = (
+        db.query(DistressHistory)
+        .filter(DistressHistory.victim_id == victim_id)
+        .order_by(DistressHistory.created_at.desc())
+        .limit(2)
+        .all()
+    )
+    trend = "stable"
+    if len(history) == 2:
+        trend = "increasing" if history[0].score > history[1].score else "decreasing" if history[0].score < history[1].score else "stable"
     return {
         "victim_id": victim_id,
-        "current_score": victim.get("current_distress_score", 0),
-        "risk_level": victim.get("risk_level", "medium"),
-        "trend": "increasing"
+        "current_score": victim.current_distress_score,
+        "risk_level": victim.risk_level,
+        "trend": trend
     }
+
+
+@app.get("/api/v1/analysis/{victim_id}/distress-trend")
+async def get_distress_trend(victim_id: int, days: int = 30, db: Session = Depends(get_db)):
+    """Get distress trend and 7/15/30 day risk forecast."""
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    records = (
+        db.query(DistressHistory)
+        .filter(DistressHistory.victim_id == victim_id)
+        .order_by(DistressHistory.created_at.desc())
+        .limit(max(1, days))
+        .all()
+    )
+    trend = [
+        {
+            "timestamp": row.created_at.isoformat() if row.created_at else None,
+            "score": row.score,
+            "risk_level": row.risk_level,
+        }
+        for row in reversed(records)
+    ]
+    latest_components = {
+        "sentiment": records[0].sentiment_score if records else 50.0,
+        "voice": records[0].voice_score if records else 50.0,
+        "behavior": records[0].behavior_score if records else 50.0,
+        "threats": records[0].threat_score if records else 50.0,
+        "history": records[0].history_score if records else 50.0,
+    }
+    forecast = predictive_service.forecast(latest_components, victim.current_distress_score)
+    return {"victim_id": victim_id, "period_days": days, "trend": trend, "prediction": forecast}
 
 # ============== DASHBOARDS ==============
 
 @app.get("/api/v1/dashboard/district")
-async def district_dashboard():
+async def district_dashboard(db: Session = Depends(get_db)):
     """District dashboard"""
     return {
         "level": "district",
         "statistics": {
-            "total_victims": 156,
-            "high_risk_victims": 12,
-            "new_alerts_today": 3
+            "total_victims": db.query(func.count(Victim.id)).scalar() or 0,
+            "high_risk_victims": db.query(func.count(Victim.id)).filter(Victim.risk_level.in_(["high", "critical"])).scalar() or 0,
+            "new_alerts_today": db.query(func.count(Alert.id)).scalar() or 0
         }
     }
 
 @app.get("/api/v1/dashboard/state")
-async def state_dashboard():
+async def state_dashboard(db: Session = Depends(get_db)):
     """State dashboard"""
     return {
         "level": "state",
         "statistics": {
-            "total_victims": 5234,
-            "high_risk_victims": 156
+            "total_victims": db.query(func.count(Victim.id)).scalar() or 0,
+            "high_risk_victims": db.query(func.count(Victim.id)).filter(Victim.risk_level.in_(["high", "critical"])).scalar() or 0
         }
     }
 
 @app.get("/api/v1/dashboard/national")
-async def national_dashboard():
+async def national_dashboard(db: Session = Depends(get_db)):
     """National dashboard"""
     return {
         "level": "national",
         "statistics": {
-            "total_victims": 45000,
-            "high_risk_victims": 3200
+            "total_victims": db.query(func.count(Victim.id)).scalar() or 0,
+            "high_risk_victims": db.query(func.count(Victim.id)).filter(Victim.risk_level.in_(["high", "critical"])).scalar() or 0
         }
     }
 
 # ============== ALERTS ==============
 
 @app.get("/api/v1/alerts")
-async def get_alerts():
+async def get_alerts(db: Session = Depends(get_db)):
     """Get alerts ordered from critical to low priority."""
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     alerts = sorted(
-        alerts_db.values(),
+        db.query(Alert).all(),
         key=lambda alert: (
-            priority_order.get(str(alert.get("level", "low")).lower(), 4),
-            -(alert.get("score") or 0),
-            alert.get("created_at", ""),
+            priority_order.get(str(alert.level).lower(), 4),
+            -(alert.score or 0),
+            alert.created_at.isoformat() if alert.created_at else "",
         ),
     )
     return {
-        "total": len(alerts_db),
-        "alerts": alerts
+        "total": len(alerts),
+        "alerts": [
+            {
+                "id": alert.id,
+                "victim_id": alert.victim_id,
+                "level": alert.level,
+                "title": alert.title,
+                "message": alert.message,
+                "score": alert.score,
+                "created_at": alert.created_at.isoformat() if alert.created_at else None,
+                "status": "acknowledged" if alert.acknowledged else "active",
+            }
+            for alert in alerts
+        ]
     }
 
 @app.post("/api/v1/alerts/{alert_id}/acknowledge")
-async def acknowledge_alert(alert_id: int):
+async def acknowledge_alert(alert_id: int, db: Session = Depends(get_db)):
     """Acknowledge an alert"""
-    if alert_id not in alerts_db:
-        return {"error": "Alert not found"}, 404
-    alerts_db[alert_id]["status"] = "acknowledged"
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert.acknowledged = True
+    db.commit()
     return {"alert_id": alert_id, "status": "acknowledged"}
 
 def call_openrouter(message: str, history=None, language="english"):
@@ -703,12 +857,23 @@ async def assistant_response(payload: dict):
 # ============== INTERVENTIONS ==============
 
 @app.get("/api/v1/interventions/{victim_id}")
-async def get_interventions(victim_id: int):
+async def get_interventions(victim_id: int, db: Session = Depends(get_db)):
     """Get interventions for victim"""
+    victim = db.query(Victim).filter(Victim.id == victim_id).first()
+    if not victim:
+        raise HTTPException(status_code=404, detail="Victim not found")
+    interventions = db.query(Intervention).filter(Intervention.victim_id == victim_id).all()
+    if not interventions:
+        recommendation = Intervention(victim_id=victim_id, type="counseling", priority="high", status="pending")
+        db.add(recommendation)
+        db.commit()
+        db.refresh(recommendation)
+        interventions = [recommendation]
     return {
         "victim_id": victim_id,
         "recommendations": [
-            {"type": "counseling", "priority": "high", "status": "pending"}
+            {"type": item.type, "priority": item.priority, "status": item.status}
+            for item in interventions
         ]
     }
 
@@ -720,4 +885,3 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
-
